@@ -1,0 +1,235 @@
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MQTT WebChat</title>
+    <!-- Google Font: Inter -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <!-- TailwindCSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              slate: { 50: "#efeee7" },
+              brand: "#000000",
+            },
+            fontFamily: { inter: ["Inter", "sans-serif"] },
+          },
+        },
+      };
+    </script>
+    <!-- MQTT.js via CDN -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  </head>
+  <body class="bg-slate-50 font-inter flex flex-col items-center p-6">
+    <!-- Inputs de usuário e sala -->
+    <div class="w-full max-w-3xl mb-4 flex space-x-4">
+      <input
+        id="usernameInput"
+        type="text"
+        placeholder="Seu nome"
+        class="flex-1 h-8 p-2 border border-brand placeholder-gray-600 text-brand rounded focus:outline-none focus:ring-2 focus:ring-brand"
+      />
+      <input
+        id="roomInput"
+        type="text"
+        placeholder="Nome da sala"
+        class="flex-1 h-8 p-2 border border-brand placeholder-gray-600 text-brand rounded focus:outline-none focus:ring-2 focus:ring-brand"
+      />
+      <button
+        id="connectBtn"
+        class="h-8 px-4 bg-brand text-slate-50 font-semibold rounded hover:bg-gray-800"
+      >
+        Conectar
+      </button>
+    </div>
+
+    <!-- Container do chat -->
+    <div
+      id="chatContainer"
+      class="w-full max-w-3xl h-[80vh] bg-white shadow-lg rounded-lg flex flex-col overflow-hidden"
+    >
+      <div
+        id="roomLabel"
+        class="p-4 border-b border-gray-200 text-xl font-semibold text-brand"
+      >
+        Sala: -
+      </div>
+      <div
+        id="messages"
+        class="flex-1 p-4 space-y-3 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100"
+      ></div>
+      <div class="p-4 border-t border-gray-200 flex items-center space-x-2">
+        <input
+          id="messageInput"
+          type="text"
+          placeholder="Digite sua mensagem..."
+          class="flex-1 h-8 p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-brand"
+        />
+        <input id="fileInput" type="file" accept="image/*" class="hidden" />
+        <button
+          id="fileBtn"
+          class="h-8 px-4 bg-gray-500 text-slate-50 font-semibold rounded hover:bg-gray-700 flex items-center"
+        >
+          <!-- Icone de upload -->
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="h-5 w-5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4-4m0 0l-4 4m4-4v12"
+            />
+          </svg>
+        </button>
+        <button
+          id="sendBtn"
+          class="h-8 px-4 bg-brand text-slate-50 font-semibold rounded hover:bg-gray-800"
+        >
+          Enviar
+        </button>
+      </div>
+    </div>
+
+    <!-- Snackbar container -->
+    <div
+      id="snackbar"
+      class="fixed bottom-5 inset-x-0 flex justify-center pointer-events-none"
+    ></div>
+  </body>
+</html>
+
+<script>
+  // MQTT WebChat Script v0.8 - Definir addSystemMessage
+  const baseTopic = "pickngo_6e512946-43ec-4c2e-8ec2-b65cce89b888";
+  // const brokerUrl = "wss://test.mosquitto.org:8081";
+  const brokerUrl = "wss://broker.emqx.io:8084/mqtt";
+
+  // Utils
+  function sanitizeRoom(name) {
+    return name.trim().replace(/\s+/g, "_");
+  }
+  function hashLightness(str) {
+    let sum = 0;
+    for (let c of str) sum += c.charCodeAt(0);
+    const light = 10 + (sum % 21);
+    return `hsl(0,0%,${light}%)`;
+  }
+  function trimName(name) {
+    return name.length > 10 ? name.slice(0, 10) + "..." : name;
+  }
+
+  // Elements
+  const usernameInput = document.getElementById("usernameInput");
+  const roomInput = document.getElementById("roomInput");
+  const connectBtn = document.getElementById("connectBtn");
+  const messagesDiv = document.getElementById("messages");
+  const roomLabel = document.getElementById("roomLabel");
+  const messageInput = document.getElementById("messageInput");
+  const sendBtn = document.getElementById("sendBtn");
+  const fileInput = document.getElementById("fileInput");
+  const fileBtn = document.getElementById("fileBtn");
+  const snackbarEl = document.getElementById("snackbar");
+
+  let client, currentUser, currentRoom;
+
+  // Persistência
+  window.addEventListener("DOMContentLoaded", () => {
+    const u = localStorage.getItem("mqtt_username");
+    const r = localStorage.getItem("mqtt_room");
+    if (u) usernameInput.value = u;
+    if (r) roomInput.value = r;
+  });
+
+  // Mostra snackbar
+  function showSnackbar(txt, error = false) {
+    const bar = document.createElement("div");
+    bar.className =
+      (error ? "bg-danger" : "bg-brand") +
+      " text-slate-50 px-4 py-2 rounded shadow-md";
+    bar.textContent = txt;
+    snackbarEl.appendChild(bar);
+    setTimeout(() => bar.remove(), 3000);
+  }
+
+  // Adiciona mensagem de sistema
+  function addSystemMessage(text) {
+    const div = document.createElement("div");
+    div.className = "text-gray-500 italic text-sm text-center";
+    div.textContent = text;
+    messagesDiv.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  // 1.Conexão
+  
+  // 2.Inscrição
+  
+  // 3.Envia texto
+  
+  // 4. Envia arquivo
+  
+  // Eventos UI
+  sendBtn.onclick = () => {
+    const t = messageInput.value.trim();
+    if (t) {
+      // sendMessage(t);
+      messageInput.value = "";
+    }
+  };
+  fileBtn.onclick = () => fileInput.click();
+
+  fileInput.onchange = () => {
+    if (fileInput.files.length) {
+      const file = fileInput.files[0];
+      const maxSize = 2 * 1024 * 1024; // 1 MB em bytes
+
+      if (file.size > maxSize) {
+        alert(
+          "O arquivo é muito grande. Por favor, envie uma imagem com tamanho máximo de 1 MB."
+        );
+        fileInput.value = ""; // Limpa o input para permitir selecionar outro arquivo
+      } else {
+        // sendFile(file);
+      }
+    }
+  };
+  messageInput.onkeyup = (e) => {
+    if (e.key === "Enter") sendBtn.click();
+  };
+  connectBtn.addEventListener("click", connect);
+
+  // Processa mensagtem recebida
+  function handleIncoming(msg) {
+    const { username, text, file } = msg;
+    const external = username !== currentUser;
+    const wrapper = document.createElement("div");
+    wrapper.className = `flex ${external ? "justify-end" : "justify-start"}`;
+    const bubble = document.createElement("div");
+    bubble.className = "p-3 rounded-lg shadow-sm text-slate-50";
+    bubble.style.backgroundColor = external ? hashLightness(username) : "#000";
+    const name = trimName(username);
+    if (file) {
+      bubble.innerHTML = `<span class=\"font-semibold\" title=\"${username}\">${name}</span><br/><img src=\"${file}\" style=\"max-width:50%;border-radius:8px;\"/>`;
+    } else {
+      bubble.innerHTML = `<span class=\"font-semibold\" title=\"${username}\">${name}</span>: ${text} <br/> <span class=\"text-gray-400 text-xs\">${new Date(
+        msg.timestamp
+      ).toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}</span>`;
+    }
+    wrapper.appendChild(bubble);
+    messagesDiv.appendChild(wrapper);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+</script>
