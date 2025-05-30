@@ -17,6 +17,7 @@
             colors: {
               slate: { 50: "#efeee7" },
               brand: "#000000",
+              danger: "#dc2626",
             },
             fontFamily: { inter: ["Inter", "sans-serif"] },
           },
@@ -25,6 +26,8 @@
     </script>
     <!-- MQTT.js via CDN -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- AWS SDK v3 -->
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1563.0.min.js"></script>
   </head>
   <body class="bg-slate-50 font-inter flex flex-col items-center p-6">
     <!-- Inputs de usuário e sala -->
@@ -52,7 +55,7 @@
     <!-- Container do chat -->
     <div
       id="chatContainer"
-      class="w-full max-w-3xl h-[80vh] bg-white shadow-lg rounded-lg flex flex-col overflow-hidden"
+      class="w-full max-w-3l h-[80vh] bg-white shadow-lg rounded-lg flex flex-col overflow-hidden"
     >
       <div
         id="roomLabel"
@@ -115,6 +118,20 @@
   // const brokerUrl = "wss://test.mosquitto.org:8081";
   const brokerUrl = "wss://broker.emqx.io:8084/mqtt";
 
+  // Configurar AWS (S3_CONFIG vem do config.js)
+  AWS.config.update({
+    accessKeyId: "AKIAY52LP5JEDSBWZKYO",
+    secretAccessKey: "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",
+    region: "us-east-1",
+  });
+
+  const s3 = new AWS.S3();
+
+  // Configuração do bucket S3
+  const S3_CONFIG = {
+    bucket: "pickngo-apresentacao-mqtt-imagens",
+  };
+
   // Utils
   function sanitizeRoom(name) {
     return name.trim().replace(/\s+/g, "_");
@@ -127,6 +144,114 @@
   }
   function trimName(name) {
     return name.length > 10 ? name.slice(0, 10) + "..." : name;
+  }
+
+  // Função para gerar nome único para o arquivo
+  function generateUniqueFileName(file) {
+    const timestamp = Date.now();
+    const randomString = Math.random().toString(36).substring(2, 15);
+    const extension = file.name.split(".").pop();
+    return `chat-images/${timestamp}-${randomString}.${extension}`;
+  }
+
+  // Função para fazer upload da imagem para S3
+  async function uploadImageToS3(file) {
+    try {
+      // Mostra loading no botão
+      const originalContent = fileBtn.innerHTML;
+      fileBtn.innerHTML = `
+        <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+      `;
+      fileBtn.disabled = true;
+
+      showSnackbar("Enviando imagem...");
+
+      const fileName = generateUniqueFileName(file);
+
+      const params = {
+        Bucket: S3_CONFIG.bucket,
+        Key: fileName,
+        Body: file,
+        ContentType: file.type,
+        ACL: "public-read", // Torna a imagem publicamente acessível
+      };
+
+      const result = await s3.upload(params).promise();
+
+      showSnackbar("Imagem enviada com sucesso!");
+      return result.Location; // Retorna a URL da imagem
+    } catch (error) {
+      console.error("Erro ao fazer upload:", error);
+      showSnackbar("Erro ao enviar imagem: " + error.message, true);
+      throw error;
+    } finally {
+      // Restaura o botão
+      fileBtn.innerHTML = `
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          class="h-5 w-5"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4-4m0 0l-4 4m4-4v12"
+          />
+        </svg>
+      `;
+      fileBtn.disabled = false;
+    }
+  }
+
+  // Função para enviar arquivo via MQTT
+  async function sendFile(file) {
+    if (!client || !client.connected) {
+      showSnackbar("Conecte-se primeiro!", true);
+      return;
+    }
+
+    try {
+      // Faz upload da imagem para S3 e obtém a URL
+      const imageUrl = await uploadImageToS3(file);
+
+      // Envia a mensagem com a URL da imagem via MQTT
+      const msg = {
+        username: currentUser,
+        file: imageUrl,
+        timestamp: new Date().toISOString(),
+      };
+
+      const topic = `${baseTopic}/${currentRoom}`;
+      client.publish(topic, JSON.stringify(msg));
+
+      // Limpa o input de arquivo
+      fileInput.value = "";
+    } catch (error) {
+      console.error("Erro ao enviar arquivo:", error);
+    }
+  }
+
+  // Função para enviar mensagens de texto
+  function sendMessage(text) {
+    if (!client || !client.connected) {
+      showSnackbar("Conecte-se primeiro!", true);
+      return;
+    }
+
+    const msg = {
+      username: currentUser,
+      text: text.trim(),
+      timestamp: new Date().toISOString(),
+    };
+
+    const topic = `${baseTopic}/${currentRoom}`;
+    client.publish(topic, JSON.stringify(msg));
   }
 
   // Elements
@@ -142,6 +267,8 @@
   const snackbarEl = document.getElementById("snackbar");
 
   let client, currentUser, currentRoom;
+
+  // Funçao de conexao
 
   // Persistência
   window.addEventListener("DOMContentLoaded", () => {
@@ -171,19 +298,11 @@
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
 
-  // 1.Conexão
-
-  // 2.Inscrição
-
-  // 3.Envia texto
-
-  // 4. Envia arquivo
-
   // Eventos UI
   sendBtn.onclick = () => {
     const t = messageInput.value.trim();
     if (t) {
-      // sendMessage(t);
+      sendMessage(t);
       messageInput.value = "";
     }
   };
@@ -192,15 +311,15 @@
   fileInput.onchange = () => {
     if (fileInput.files.length) {
       const file = fileInput.files[0];
-      const maxSize = 2 * 1024 * 1024; // 1 MB em bytes
+      const maxSize = 20 * 1024 * 1024; // 20 MB em bytes
 
       if (file.size > maxSize) {
         alert(
-          "O arquivo é muito grande. Por favor, envie uma imagem com tamanho máximo de 1 MB."
+          "O arquivo é muito grande. Por favor, envie uma imagem com tamanho máximo de 2 MB."
         );
         fileInput.value = ""; // Limpa o input para permitir selecionar outro arquivo
       } else {
-        // sendFile(file);
+        sendFile(file);
       }
     }
   };
@@ -216,11 +335,11 @@
     const wrapper = document.createElement("div");
     wrapper.className = `flex ${external ? "justify-end" : "justify-start"}`;
     const bubble = document.createElement("div");
-    bubble.className = "p-3 rounded-lg shadow-sm text-slate-50";
+    bubble.className = "px-3 py-1 rounded-lg shadow-sm text-slate-50 w-auto";
     bubble.style.backgroundColor = external ? hashLightness(username) : "#000";
     const name = trimName(username);
     if (file) {
-      bubble.innerHTML = `<span class=\"font-semibold\" title=\"${username}\">${name}</span><br/><img src=\"${file}\" style=\"max-width:50%;border-radius:8px;\"/>`;
+      bubble.innerHTML = `<span class=\"font-semibold mb-2\" title=\"${username}\">${name}</span><br/><img src=\"${file}\" style=\"max-width:50%;border-radius:8px;\"/>`;
     } else {
       bubble.innerHTML = `<span class=\"font-semibold\" title=\"${username}\">${name}</span>: ${text} <br/> <span class=\"text-gray-400 text-xs\">${new Date(
         msg.timestamp
