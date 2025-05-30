@@ -28,6 +28,8 @@
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <!-- AWS SDK v3 -->
     <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1563.0.min.js"></script>
+    <!-- Configuração do S3 -->
+    <script src="config.js"></script>
   </head>
   <body class="bg-slate-50 font-inter flex flex-col items-center p-6">
     <!-- Inputs de usuário e sala -->
@@ -120,17 +122,12 @@
 
   // Configurar AWS (S3_CONFIG vem do config.js)
   AWS.config.update({
-    accessKeyId: "AKIAY52LP5JEDSBWZKYO",
-    secretAccessKey: "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",
-    region: "us-east-1",
+    accessKeyId: S3_CONFIG.accessKeyId,
+    secretAccessKey: S3_CONFIG.secretAccessKey,
+    region: S3_CONFIG.region,
   });
 
   const s3 = new AWS.S3();
-
-  // Configuração do bucket S3
-  const S3_CONFIG = {
-    bucket: "pickngo-apresentacao-mqtt-imagens",
-  };
 
   // Utils
   function sanitizeRoom(name) {
